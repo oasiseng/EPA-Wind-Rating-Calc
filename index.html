@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wind EPA Rating Calculator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f9f9f9; }
+        h1 { color: #333; }
+        form { display: grid; gap: 10px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        label { display: flex; justify-content: space-between; align-items: center; }
+        input, select { padding: 8px; border: 1px solid #ddd; border-radius: 4px; flex: 1; max-width: 150px; }
+        button { padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        #results { margin-top: 20px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background: #f1f1f1; }
+        .gauge { height: 20px; border: 1px solid #ccc; border-radius: 10px; overflow: hidden; margin: 10px 0; }
+        .green { background: linear-gradient(to right, green 0%, green 100%); }
+        .yellow { background: linear-gradient(to right, yellow 0%, yellow 100%); }
+        .red { background: linear-gradient(to right, red 0%, red 100%); }
+        .disclaimer { font-size: 0.9em; color: #666; margin-top: 20px; padding: 10px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px; }
+        #exportBtn { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Wind EPA Rating Calculator</h1>
+    <p>Preliminary tool for light poles/fixtures per ASCE 7-22. Enter data and click Calculate.</p>
+    
+    <form id="calcForm">
+        <label>Pole Height (ft): 
+            <select id="poleHeight" title="Select pole height; affects capacity centroid.">
+                <option value="10">10</option>
+                <option value="15">15</option>
+                <option value="20">20</option>
+                <option value="25" selected>25</option>
+                <option value="30">30</option>
+                <option value="35">35</option>
+                <option value="40">40</option>
+            </select>
+        </label>
+        <label>Pole Type/Model: 
+            <select id="poleType" title="Informational; not used in calcs (ref. manufacturer for material-specific limits).">
+                <option>Fiberglass</option>
+                <option>Aluminum</option>
+                <option>Steel</option>
+                <option>Other</option>
+            </select>
+        </label>
+        <label>EPA Rating Capacity (ft²): 
+            <input type="number" id="epaRated" step="0.01" min="0" title="Max EPA from manufacturer specs." required>
+        </label>
+        <label>Rated Wind Speed (mph): 
+            <input type="number" id="vRated" step="1" min="0" title="Wind speed for manufacturer EPA rating." required>
+        </label>
+        <label>Attachment EPA (ft²): 
+            <input type="number" id="epaAttach" step="0.01" min="0" title="Effective Projected Area of fixture/solar panel/etc." required>
+        </label>
+        <label>Mounting Height (ft): 
+            <input type="number" id="hAttach" step="0.1" min="0" title="Height to attachment centroid (default: pole top)." value="">
+        </label>
+        <label>Design Wind Speed (mph): 
+            <select id="vDesign" title="Basic wind speed per ASCE 7-22 maps (Risk Cat. II).">
+                <option value="120">120</option>
+                <option value="140">140</option>
+                <option value="150" selected>150</option>
+                <option value="170">170</option>
+            </select>
+        </label>
+        <label>Exposure Category: 
+            <select id="exposure" title="Per ASCE 7-22 Sec. 26.7: B=urban, C=open, D=coastal/flat.">
+                <option value="B">B</option>
+                <option value="C" selected>C</option>
+                <option value="D">D</option>
+            </select>
+        </label>
+        <button type="button" onclick="calculate()">Calculate</button>
+    </form>
+    
+    <div id="results"></div>
+    <button id="exportBtn" onclick="exportPDF()" style="display:none;">Export to PDF</button>
+    
+    <p class="disclaimer">
+        <strong>Disclaimer:</strong> This calculator is for preliminary analysis only. Final design should follow ASCE 7-22, local building codes (e.g., IBC 2024), and manufacturer specifications, and be reviewed by a licensed professional engineer. Not for stamped submittals.
+    </p>
+    
+    <div id="printArea" style="display:none;">
+        <h2>Wind EPA Rating Calculation Results</h2>
+        <p>Date: September 16, 2025</p>
+    </div>
+
+    <script>
+        // ASCE 7-22 Table 26.10-1 Kz values (interpolated for 35 ft)
+        function getKz(height, exposure) {
+            const table = {
+                B: {15: 0.57, 20: 0.62, 25: 0.66, 30: 0.70, 35: 0.72, 40: 0.74},
+                C: {15: 0.85, 20: 0.90, 25: 0.94, 30: 0.98, 35: 1.01, 40: 1.04},
+                D: {15: 1.03, 20: 1.08, 25: 1.12, 30: 1.16, 35: 1.19, 40: 1.22}
+            };
+            height = Math.max(height, 15); // Min per table
+            const keys = Object.keys(table[exposure]).map(Number).sort((a, b) => a - b);
+            for (let i = 0; i < keys.length - 1; i++) {
+                if (height <= keys[i + 1]) {
+                    const low = keys[i], high = keys[i + 1];
+                    const valLow = table[exposure][low], valHigh = table[exposure][high];
+                    return valLow + (valHigh - valLow) * (height - low) / (high - low);
+                }
+            }
+            return table[exposure][40]; // Max height
+        }
+
+        function calculate() {
+            const poleH = parseFloat(document.getElementById('poleHeight').value);
+            const epaRated = parseFloat(document.getElementById('epaRated').value);
+            const vRated = parseFloat(document.getElementById('vRated').value);
+            let hAttach = parseFloat(document.getElementById('hAttach').value);
+            if (isNaN(hAttach) || hAttach === 0) hAttach = poleH; // Default to pole top
+            const epaAttach = parseFloat(document.getElementById('epaAttach').value);
+            const vDesign = parseFloat(document.getElementById('vDesign').value);
+            const exposure = document.getElementById('exposure').value;
+
+            if (isNaN(epaRated) || isNaN(vRated) || isNaN(epaAttach) || isNaN(vDesign)) {
+                alert('Please fill all required fields (marked with *).');
+                return;
+            }
+
+            // Step 1: q_rated (basic, no Kz/G per manufacturer convention)
+            const qRated = 0.00256 * Math.pow(vRated, 2);
+            // Step 2: q_design per ASCE 7-22
+            const kz = getKz(hAttach, exposure);
+            const G = 0.85;
+            const qDesign = 0.00256 * Math.pow(vDesign, 2) * kz * G;
+            // Moments (h = poleH for capacity centroid assumption)
+            const h = poleH;
+            const mCapacity = epaRated * qRated * h;
+            const mDemand = epaAttach * qDesign * hAttach;
+            const sf = mCapacity / mDemand;
+            const allowableEPA = mCapacity / (qDesign * hAttach);
+
+            // Color/status
+            let colorClass = 'red', status = 'Fail';
+            let gaugeWidth = Math.min((sf / 1.5) * 100, 100);
+            if (sf >= 1.5) { colorClass = 'green'; status = 'Safe'; }
+            else if (sf >= 1.0) { colorClass = 'yellow'; status = 'Monitor'; }
+            gaugeWidth = sf < 1 ? (sf * 100) : gaugeWidth; // Scale below 1
+
+            // Output table
+            let html = `
+                <table>
+                    <tr><th>Pole Height</th><th>Design Wind Speed</th><th>Exposure</th></tr>
+                    <tr><td>${poleH} ft</td><td>${vDesign} mph</td><td>${exposure}</td></tr>
+                </table>
+                <table>
+                    <tr><th>Manufacturer EPA Capacity</th><th>Allowable Attachment EPA (equiv.)</th><th>Safety Factor</th></tr>
+                    <tr><td>${epaRated.toFixed(2)} ft² @ ${vRated} mph</td><td>${allowableEPA.toFixed(2)} ft² @ ${vDesign} mph</td><td>${sf.toFixed(2)}</td></tr>
+                </table>
+                <div class="gauge ${colorClass}" style="width: ${gaugeWidth}%;"></div>
+                <p><strong>${status}</strong> (SF = ${sf.toFixed(2)})</p>
+            `;
+
+            let rec = '';
+            if (sf >= 1.5) rec = 'Attachment appears acceptable under selected wind speed.';
+            else if (sf >= 1.0) rec = 'Attachment is marginally acceptable; monitor for optimizations (e.g., lower mount).';
+            else rec = 'Attachment demand exceeds pole capacity; consider smaller attachment, lower mounting, or stronger pole.';
+            html += `<p><strong>Recommendation:</strong> ${rec}</p>`;
+
+            document.getElementById('results').innerHTML = html;
+            document.getElementById('exportBtn').style.display = 'block';
+
+            // Prep print area with inputs
+            const inputsStr = `Pole Height: ${poleH} ft | Pole Type: ${document.getElementById('poleType').value} | EPA Rated: ${epaRated.toFixed(2)} ft² @ ${vRated} mph | Attachment EPA: ${epaAttach.toFixed(2)} ft² | Mounting Height: ${hAttach} ft | Design Wind: ${vDesign} mph | Exposure: ${exposure}`;
+            document.getElementById('printArea').innerHTML = `
+                <h2>Wind EPA Rating Calculation Results</h2>
+                <p><strong>Generated:</strong> ${new Date().toLocaleDateString()}</p>
+                <p><strong>Inputs:</strong> ${inputsStr}</p>
+                ${html}
+                <p>Calculated per ASCE 7-22 simplified method. Verify with licensed PE.</p>
+            `;
+        }
+
+        function exportPDF() {
+            const printArea = document.getElementById('printArea');
+            html2canvas(printArea, { scale: 1 }).then((canvas) => {
+                const imgData = canvas.toDataURL('image/png');
+                const pdf = new window.jspdf.jsPDF();
+                const pdfWidth = pdf.internal.pageSize.getWidth();
+                const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+                pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+                pdf.save('Wind_EPA_Calculator_Results.pdf');
+            }).catch((err) => {
+                alert('PDF export failed; try printing the page instead.');
+                console.error(err);
+            });
+        }
+
+        // Set defaults on load
+        window.onload = function() {
+            document.getElementById('poleHeight').value = 25;
+            document.getElementById('hAttach').value = 25; // Sync initial
+            // User fills EPA fields
+        };
+    </script>
+</body>
+</html>
