@@ -47,7 +47,8 @@ A lightweight, browser-based calculator for preliminary wind EPA (Effective Proj
 ---
 
 ## 📷 Screenshots  
-*(Add screenshots of the calculator interface and output results here)*  
+*<img width="928" height="883" alt="image" src="https://github.com/user-attachments/assets/0abce506-9ae4-462c-96bb-49503b8f4726" />*
+  
 
 ---
 
